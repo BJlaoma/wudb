@@ -1,6 +1,7 @@
 package Util
 
 import (
+	"fmt"
 	"os"
 	"sync"
 )
@@ -41,14 +42,28 @@ func (f *FileHandle) GetFile() *os.File {
 @return n 实际读取到的字节数
 @return err 错误信息
 */
-func (f *FileHandle) Read(p []byte) (n int, err error) {
+func (f *FileHandle) Read(length int64) ([]byte, error) {
 	f.mutex.RLock()
 	defer f.mutex.RUnlock()
-	n, err = f.File.ReadAt(p, f.Offset)
-	if err == nil {
-		f.Offset += int64(n)
+
+	// 创建缓冲区
+	data := make([]byte, length)
+
+	// 从指定偏移量读取数据
+	n, err := f.File.ReadAt(data, f.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("读取文件失败: %v", err)
 	}
-	return n, err
+
+	// 更新偏移量
+	f.Offset += int64(n)
+
+	// 如果读取的数据长度不足，返回错误
+	if int64(n) < length {
+		return data[:n], fmt.Errorf("读取数据不完整: 期望 %d 字节, 实际读取 %d 字节", length, n)
+	}
+
+	return data, nil
 }
 
 /*

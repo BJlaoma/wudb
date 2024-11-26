@@ -7,18 +7,19 @@ import (
 	"wudb/Util"
 )
 
-// 文件头大小：12*32 bit+ = 48*8 bit = 48 byte
+// 文件头大小：64B
 type FileHeader struct {
-	Magic         uint32 // 魔数，用于识别文件类型
-	Version       uint32 // 文件版本
-	PageSize      uint32 // 页大小
-	PageCount     uint32 // 总页数
-	FirstFreePage uint32 // 第一个空闲页的ID
-	LastPageID    uint32 // 最后一页的ID
-	CreateTime    int64  // 创建时间 2024-11-25 10:00:00 //
-	UpdateTime    int64  // 最后更新时间
-	Checksum      uint32 // 校验和
-	FileSize      uint32 // 文件大小
+	Magic         uint32   // 魔数，用于识别文件类型
+	Version       uint32   // 文件版本
+	PageSize      uint32   // 页大小
+	PageCount     uint32   // 总页数
+	FirstFreePage uint32   // 第一个空闲页的ID
+	LastPageID    uint32   // 最后一页的ID
+	CreateTime    int64    // 创建时间 2024-11-25 10:00:00 //
+	UpdateTime    int64    // 最后更新时间
+	Checksum      uint32   // 校验和
+	FileSize      uint32   // 文件大小
+	Reserved      [16]byte // 保留字段
 }
 
 const (

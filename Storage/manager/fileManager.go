@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	FileHeaderSize = 48
-	PageHeaderSize = 41
+	FileHeaderSize = 64
+	PageHeaderSize = 64
 	PageSize       = 4096
 	DBFileSuffix   = ".wdb"
 	DBFileDir      = "wudb/db/" // 扩展，可以配置
