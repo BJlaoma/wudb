@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 	"wudb/Entity/Page"
+	"wudb/Entity/Record"
 	"wudb/Util"
 )
 
@@ -83,6 +84,30 @@ func (pm *PageManager) CreatePage() (*Page.Page, error) {
 	pm.rootPage.PageCount++
 	pm.WriteRootPage()
 	return page, nil
+}
+
+// 分裂叶子节点
+func (pm *PageManager) splitLeafPage(page *Page.Page) (*Page.Page, *Page.Page, *Record.InternalRecord) {
+	newPage := pm.CreatePage()
+	key, value, recordKey := page.splitKeyAndValue()
+	newPage.WriteKey(0, key)
+	newPage.WriteValue(0, value)
+	page.Header.NextPageID = newPage.Header.PageID
+	newPage.Header.PrevPageID = page.Header.PageID
+	pm.UpdatePage(page)
+	pm.UpdatePage(newPage)
+
+	internalRecord := Record.NewInternalRecord(Record.RecordHeader{
+		IsDeleted:     0,
+		RecordLength:  page.Header.RecordSize,
+		TransactionID: 0,
+		Timestamp:     uint32(time.Now().Unix()),
+		KeySize:       32,
+		ValueSize:     page.Header.RecordSize - 32,
+		FrontPointer:  page.Header.PageID,
+		NextPointer:   newPage.Header.PageID,
+	}, recordKey, page.Header.PageID, newPage.Header.PageID)
+	return page, newPage, internalRecord
 }
 
 /*
