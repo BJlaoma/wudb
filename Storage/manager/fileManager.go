@@ -61,6 +61,13 @@ func (fm *FileManager) CreateFile(filename string) error {
 	if err := header.WriteToFile(fh); err != nil {
 		return fmt.Errorf("写入文件头失败: %v", err)
 	}
+
+	// 创建PageManager并初始化MetaPage
+	pm := NewPageManager(fh)
+	if err := pm.InitMetaPage(); err != nil {
+		return fmt.Errorf("初始化MetaPage失败: %v", err)
+	}
+
 	defer fh.Close()
 	return nil
 }

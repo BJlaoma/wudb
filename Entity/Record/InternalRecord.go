@@ -3,23 +3,22 @@ package Record
 import (
 	"bytes"
 	"encoding/binary"
-	"unsafe"
 )
 
 type InternalRecord struct {
-	header       RecordHeader
+	Header       RecordHeader
 	Key          [32]byte
-	FrontPointer uint32
-	NextPointer  uint32
-	Reserved     [128]byte
+	FrontPointer uint32 // 前驱指针 4
+	NextPointer  uint32 // 后继指针 4
+	Reserved     [120]byte
 }
 
 const (
-	InternalRecordSize = unsafe.Sizeof(InternalRecord{})
+	InternalRecordSize = 192
 )
 
 func NewInternalRecord(header RecordHeader, key [32]byte, frontPointer uint32, nextPointer uint32) *InternalRecord {
-	return &InternalRecord{header: header, Key: key, FrontPointer: frontPointer, NextPointer: nextPointer}
+	return &InternalRecord{Header: header, Key: key, FrontPointer: frontPointer, NextPointer: nextPointer}
 }
 
 func (ir *InternalRecord) GetKey() [32]byte {
@@ -35,11 +34,11 @@ func (ir *InternalRecord) GetNextPointer() uint32 {
 }
 
 func (ir *InternalRecord) GetHeader() RecordHeader {
-	return ir.header
+	return ir.Header
 }
 
 func (ir *InternalRecord) SetHeader(header RecordHeader) {
-	ir.header = header
+	ir.Header = header
 }
 
 func (ir *InternalRecord) SetKey(key [32]byte) {

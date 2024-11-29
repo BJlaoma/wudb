@@ -1,5 +1,7 @@
 package Record
 
+import "time"
+
 // 大小：32Byte
 type RecordHeader struct {
 	IsDeleted     uint8
@@ -9,6 +11,17 @@ type RecordHeader struct {
 	TransactionID uint32
 	Timestamp     uint32
 	Reserved      [11]byte
+}
+
+func NewRecordHeader() *RecordHeader {
+	return &RecordHeader{
+		IsDeleted:     0,
+		RecordLength:  192,
+		KeySize:       32,
+		ValueSize:     128,
+		TransactionID: 0,
+		Timestamp:     uint32(time.Now().Unix()),
+	}
 }
 
 // Getter 方法

@@ -26,7 +26,10 @@ type LeafPage struct {
 }
 
 func NewPageBPlusTree() *PageBPlusTree {
-	return &PageBPlusTree{}
+	meta := &PageBPlusTree{}
+	meta.Header.PageType = MetaPageID
+	meta.Header.PageID = 0 // MetaPage总是第0页
+	return meta
 }
 
 func (p *PageBPlusTree) SerializeTo() ([]byte, error) {

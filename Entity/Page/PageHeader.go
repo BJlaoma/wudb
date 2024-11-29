@@ -24,7 +24,8 @@ type PageHeader struct {
 	RecordSize     uint32  // 记录的占用大小
 	MaxRecordCount uint32  // 最大记录数
 	IsDirty        uint8   // 是否脏页
-	Reserved1      [3]byte // 保留字段1
+	IsDeleted      uint8   // 是否删除
+	Reserved1      [2]byte // 保留字段1
 
 	TransactionID uint32 // 事务ID
 	CreateTime    uint32 // 创建时间
@@ -44,13 +45,16 @@ func init() {
 }
 
 func NewPageHeader() *PageHeader {
-	fmt.Printf("PageHeader 大小: %d 字节\n", PageHeaderSize)
+	//fmt.Printf("PageHeader 大小: %d 字节\n", PageHeaderSize)
 	CreateTime := time.Now().Unix()
 	ModifyTime := CreateTime
-
+	MaxRecordCount := 16
 	return &PageHeader{
-		CreateTime: uint32(CreateTime),
-		ModifyTime: uint32(ModifyTime),
+		CreateTime:     uint32(CreateTime),
+		ModifyTime:     uint32(ModifyTime),
+		IsDeleted:      0,
+		MaxRecordCount: uint32(MaxRecordCount),
+		RecordSize:     uint32(192),
 	}
 }
 
