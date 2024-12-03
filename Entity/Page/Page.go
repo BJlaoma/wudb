@@ -564,3 +564,29 @@ func (p *Page) RangeQuery(startKey, endKey [32]byte) ([]*Record.Record, error) {
 
 	return results, nil
 }
+
+// 更新记录
+func (p *Page) UpdateRecord(record *Record.Record) (error, *Record.Record) {
+	// 找到记录
+	for i := uint32(0); i < p.Header.RecordCount; i++ {
+		currentKey := p.Key[i*32 : (i+1)*32]
+		if bytes.Compare(record.Key[:], currentKey[:]) == 0 {
+			oldRecord, err := p.GetRecordAt(i)
+			if err != nil {
+				return err, nil
+			}
+			return p.UpdateRecordAt(i, record), oldRecord
+		}
+	}
+	return fmt.Errorf("记录不存在"), nil
+}
+
+func (p *Page) UpdateRecordAt(index uint32, record *Record.Record) error {
+	if index >= p.Header.RecordCount {
+		return fmt.Errorf("索引越界")
+	}
+
+	p.WriteKey(uint32(index*32), record.Key[:])
+	p.WriteValue(uint32(index*p.Header.RecordSize), record.Value[:])
+	return nil
+}

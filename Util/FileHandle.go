@@ -16,7 +16,27 @@ type FileHandle struct {
 func NewFileHandle(fileID string, file *os.File) *FileHandle {
 	return &FileHandle{FileID: fileID, File: file, Offset: 0}
 }
-
+func NewFileHandleWithCreate(fileName string) (*FileHandle, error) {
+	// 先检查文件是否存在
+	if _, err := os.Stat(fileName); err == nil {
+		// 文件存在，以读写模式打开
+		file, err := os.OpenFile(fileName, os.O_RDWR, 0666)
+		if err != nil {
+			return nil, fmt.Errorf("打开文件失败: %v", err)
+		}
+		return &FileHandle{FileID: fileName, File: file, Offset: 0}, nil
+	} else if os.IsNotExist(err) {
+		// 文件不存在，创建新文件
+		file, err := os.Create(fileName)
+		if err != nil {
+			return nil, fmt.Errorf("创建文件失败: %v", err)
+		}
+		return &FileHandle{FileID: fileName, File: file, Offset: 0}, nil
+	} else {
+		// 其他错误
+		return nil, fmt.Errorf("检查文件状态失败: %v", err)
+	}
+}
 func (f *FileHandle) SetOffset(offset int64) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()

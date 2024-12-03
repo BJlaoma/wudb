@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"wudb/Entity/Page"
 	"wudb/Entity/Record"
+	"wudb/Transaction"
 	"wudb/Util"
 )
 
@@ -22,19 +23,29 @@ func (e Error) Error() string {
 }
 
 type RecordManager struct {
-	fileHandle  *Util.FileHandle
-	pageManager *PageManager
+	fileHandle         *Util.FileHandle
+	pageManager        *PageManager
+	transactionManager *Transaction.TransactionManager
 }
 
 func NewRecordManager(fileHandle *Util.FileHandle) *RecordManager {
+	transactionManager := Transaction.NewTransactionManagerWithHandle(fileHandle)
 	return &RecordManager{
-		fileHandle:  fileHandle,
-		pageManager: NewPageManager(fileHandle),
+		fileHandle:         fileHandle,
+		pageManager:        NewPageManager(fileHandle),
+		transactionManager: transactionManager,
 	}
 }
 
 // 插入记录
-func (rm *RecordManager) InsertRecord(record *Record.Record) error {
+func (rm *RecordManager) InsertRecord(record *Record.Record, tx *Transaction.Transaction) error {
+	operation := Transaction.Operation{
+		TransactionID: tx.TransactionID,
+		OperationType: Transaction.InsertOperation,
+		Record:        record,
+		OldRecord:     nil,
+	}
+	rm.transactionManager.AddOperation(operation)
 	meta, err := rm.pageManager.GetMetaPage()
 	if err != nil {
 		return err
@@ -122,6 +133,34 @@ func (rm *RecordManager) insertRecordToTree(record *Record.Record, pageID uint32
 	}
 
 	return fmt.Errorf("无效的页面类型"), nil
+}
+
+// 递归更新记录
+func (rm *RecordManager) updateRecordToTree(record *Record.Record, pageID uint32) (error, *Record.Record, uint32) {
+	currentPage, err := rm.pageManager.GetPage(pageID)
+	if err != nil {
+		return err, nil, 0
+	}
+
+	// 如果是内部节点
+	if currentPage.Header.PageType == Page.InternalPageID {
+		// 找到下一层的页面ID
+		nextPageID := rm.findNextPage(currentPage, record.GetKey())
+		return rm.updateRecordToTree(record, nextPageID)
+	}
+
+	// 如果是叶子节点
+	if currentPage.Header.PageType == Page.LeafPageID {
+		// 尝试更新记录
+		err, oldRecord := currentPage.UpdateRecord(record)
+		if err != nil {
+			return err, nil, 0
+		}
+		// 更新页面
+		return rm.pageManager.UpdatePage(currentPage), oldRecord, currentPage.Header.PageID
+	}
+
+	return fmt.Errorf("无效的页面类型"), nil, 0
 }
 
 // 分裂叶子节点
@@ -298,7 +337,15 @@ func (rm *RecordManager) splitInternalPage(page *Page.Page, record *Record.Inter
 }
 
 // 删除记录
-func (rm *RecordManager) DeleteRecord(key [32]byte) error {
+func (rm *RecordManager) DeleteRecord(key [32]byte, tx *Transaction.Transaction) error {
+	operation := Transaction.Operation{
+		TransactionID: tx.TransactionID,
+		OperationType: Transaction.DeleteOperation,
+		Record:        nil,
+		OldRecord:     nil,
+		PageID:        0,
+	}
+	tx.AddOperation(operation)
 	meta, err := rm.pageManager.GetMetaPage()
 	if err != nil {
 		return err
@@ -369,6 +416,38 @@ func (rm *RecordManager) deleteRecordFromTree(key [32]byte, pageID uint32) error
 	}
 
 	return fmt.Errorf("无效的页面类型")
+}
+
+// 更新记录
+func (rm *RecordManager) UpdateRecord(record *Record.Record, tx *Transaction.Transaction) error {
+	operation := Transaction.Operation{
+		TransactionID: tx.TransactionID,
+		OperationType: Transaction.UpdateOperation,
+		Record:        record,
+		OldRecord:     nil,
+		PageID:        0,
+	}
+
+	meta, err := rm.pageManager.GetMetaPage()
+	if err != nil {
+		return err
+	}
+
+	if meta.RootPageID == 0 {
+		if err := rm.initBPlusTree(); err != nil {
+			return fmt.Errorf("初始化B+树失败: %v", err)
+		}
+		meta, _ = rm.pageManager.GetMetaPage()
+	}
+
+	err, oldRecord, pageID := rm.updateRecordToTree(record, meta.RootPageID)
+	if err != nil {
+		return err
+	}
+	operation.OldRecord = oldRecord
+	operation.PageID = int32(pageID)
+	tx.AddOperation(operation)
+	return nil
 }
 
 // 合并叶子节点
@@ -689,4 +768,21 @@ func (rm *RecordManager) mergeInternalPages(page, siblingPage *Page.Page, isLeft
 
 	// 删除源页面
 	return rm.pageManager.DisposePage(sourcePage)
+}
+
+func (rm *RecordManager) Rollback(transaction *Transaction.Transaction) error {
+	for _, operation := range transaction.Operations {
+		if operation.OperationType == Transaction.UpdateOperation {
+			_, _, pageID := rm.updateRecordToTree(operation.OldRecord, uint32(operation.PageID))
+			operation.PageID = int32(pageID)
+		}
+		if operation.OperationType == Transaction.DeleteOperation {
+			rm.InsertRecord(operation.Record, transaction)
+		}
+		if operation.OperationType == Transaction.InsertOperation {
+			rm.DeleteRecord(operation.Record.Key, transaction)
+		}
+	}
+	rm.transactionManager.Rollback(transaction.TransactionID)
+	return nil
 }
