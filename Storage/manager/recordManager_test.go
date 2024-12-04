@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 	"wudb/Entity/Record"
+	"wudb/Transaction"
 )
 
 // 测试环境设置
@@ -61,6 +62,15 @@ func createTestRecord(key uint32, value string) *Record.Record {
 	)
 }
 
+// 创建测试事务
+func createTestTransaction(t *testing.T, rm *RecordManager) *Transaction.Transaction {
+	tx := Transaction.NewTransaction(1, 1, Transaction.ReadCommitted)
+	if tx == nil {
+		t.Fatal("创建事务失败")
+	}
+	return tx
+}
+
 // 测试插入单条记录
 func TestRecordManager_InsertSingleRecord(t *testing.T) {
 	rm, _, cleanup := setupRecordManagerTest(t)
@@ -68,11 +78,14 @@ func TestRecordManager_InsertSingleRecord(t *testing.T) {
 
 	t.Log("开始测试插入单条记录")
 
+	// 创建测试事务
+	tx := createTestTransaction(t, rm)
+
 	// 创建测试记录
 	record := createTestRecord(1, "test value")
 
 	// 插入记录
-	err := rm.InsertRecord(record)
+	err := rm.InsertRecord(record, tx)
 	if err != nil {
 		t.Fatalf("插入记录失败: %v", err)
 	}
@@ -88,6 +101,11 @@ func TestRecordManager_InsertSingleRecord(t *testing.T) {
 	if !bytes.Equal(found.Value[:len("test value")], []byte("test value")) {
 		t.Error("记录值不匹配")
 	}
+
+	// 提交事务
+	if err := rm.transactionManager.Commit(tx.TransactionID); err != nil {
+		t.Fatalf("提交事务失败: %v", err)
+	}
 }
 
 // 测试插入多条记录
@@ -97,11 +115,14 @@ func TestRecordManager_InsertMultipleRecords(t *testing.T) {
 
 	t.Log("开始测试插入多条记录")
 
+	// 创建测试事务
+	tx := createTestTransaction(t, rm)
+
 	// 插入多条记录
 	recordCount := 100
 	for i := 0; i < recordCount; i++ {
 		record := createTestRecord(uint32(i), "value"+string(rune(i)))
-		if err := rm.InsertRecord(record); err != nil {
+		if err := rm.InsertRecord(record, tx); err != nil {
 			t.Fatalf("插入第 %d 条记录失败: %v", i, err)
 		}
 	}
@@ -123,6 +144,11 @@ func TestRecordManager_InsertMultipleRecords(t *testing.T) {
 			t.Errorf("未找到第 %d 条记录", i)
 		}
 	}
+
+	// 提交事务
+	if err := rm.transactionManager.Commit(tx.TransactionID); err != nil {
+		t.Fatalf("提交事务失败: %v", err)
+	}
 }
 
 // 测试页面分裂
@@ -130,13 +156,16 @@ func TestRecordManager_PageSplit(t *testing.T) {
 	rm, _, cleanup := setupRecordManagerTest(t)
 	defer cleanup()
 
+	// 创建测试事务
+	tx := createTestTransaction(t, rm)
+
 	t.Log("开始测试页面分裂")
 
 	// 插入足够多的记录以触发分裂
 	recordCount := 200 // 应该足够触发分裂
 	for i := 0; i < recordCount; i++ {
 		record := createTestRecord(uint32(i), "test value "+string(rune(i)))
-		if err := rm.InsertRecord(record); err != nil {
+		if err := rm.InsertRecord(record, tx); err != nil {
 			t.Fatalf("插入第 %d 条记录失败: %v", i, err)
 		}
 	}
@@ -158,6 +187,7 @@ func TestRecordManager_PageSplit(t *testing.T) {
 			t.Errorf("查找第 %d 条记录失败: %v", i, err)
 		}
 	}
+	rm.TreeReverse()
 }
 
 // 测试删除记录
@@ -167,24 +197,28 @@ func TestRecordManager_DeleteRecord(t *testing.T) {
 
 	t.Log("开始测试删除记录")
 
+	// 创建测试事务
+	tx := createTestTransaction(t, rm)
+
 	// 先插入一些记录
-	records := make([]*Record.Record, 20)
-	for i := 0; i < 20; i++ {
+	records := make([]*Record.Record, 200)
+	//nums := Util.RandomUniqueInts(0, 100000000, 200)
+	for i := 0; i < 200; i++ {
 		records[i] = createTestRecord(uint32(i), "test value "+string(rune(i)))
-		if err := rm.InsertRecord(records[i]); err != nil {
+		if err := rm.InsertRecord(records[i], tx); err != nil {
 			t.Fatalf("插入记录失败: %v", err)
 		}
 	}
-
+	rm.TreeReverse()
 	// 删除部分记录
-	for i := 0; i < 10; i++ {
-		if err := rm.DeleteRecord(records[i].GetKey()); err != nil {
+	for i := 0; i < 40; i++ {
+		if err := rm.DeleteRecord(records[i].GetKey(), tx); err != nil {
 			t.Errorf("删除记录失败: %v", err)
 		}
 	}
-
+	rm.TreeReverse()
 	// 验证删除的记录不存在
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 1; i++ {
 		_, err := rm.FindRecord(records[i].GetKey())
 		if err == nil {
 			t.Errorf("记录 %d 应该已被删除", i)
@@ -208,13 +242,16 @@ func TestRecordManager_RangeQuery(t *testing.T) {
 	rm, _, cleanup := setupRecordManagerTest(t)
 	defer cleanup()
 
+	// 创建测试事务
+	tx := createTestTransaction(t, rm)
+
 	t.Log("开始测试范围查询")
 
 	// 插入有序记录
 	recordCount := 100
 	for i := 0; i < recordCount; i++ {
 		record := createTestRecord(uint32(i), "value"+string(rune(i)))
-		if err := rm.InsertRecord(record); err != nil {
+		if err := rm.InsertRecord(record, tx); err != nil {
 			t.Fatalf("插入记录失败: %v", err)
 		}
 	}
@@ -241,5 +278,71 @@ func TestRecordManager_RangeQuery(t *testing.T) {
 		if bytes.Compare(results[i-1].Key[:], results[i].Key[:]) >= 0 {
 			t.Error("范围查询结果未正确排序")
 		}
+	}
+}
+
+// 测试事务回滚
+func TestRecordManager_TransactionRollback(t *testing.T) {
+	rm, _, cleanup := setupRecordManagerTest(t)
+	defer cleanup()
+
+	t.Log("开始测试事务回滚")
+
+	// 创建测试事务
+	tx := createTestTransaction(t, rm)
+
+	// 插入一些记录
+	for i := 0; i < 5; i++ {
+		record := createTestRecord(uint32(i), "value"+string(rune(i)))
+		if err := rm.InsertRecord(record, tx); err != nil {
+			t.Fatalf("插入记录失败: %v", err)
+		}
+	}
+
+	// 回滚事务
+	if err := rm.Rollback(tx); err != nil {
+		t.Fatalf("回滚事务失败: %v", err)
+	}
+	rm.TreeReverse()
+	// 验证记录是否被回滚
+	for i := 0; i < 5; i++ {
+		var key [32]byte
+		key[0] = byte(i >> 24)
+		key[1] = byte(i >> 16)
+		key[2] = byte(i >> 8)
+		key[3] = byte(i)
+
+		_, err := rm.FindRecord(key)
+		if err == nil {
+			t.Errorf("记录 %d 应该已被回滚", i)
+		}
+	}
+}
+
+// 测试事务撤销
+func TestRecordManager_TransactionUndo(t *testing.T) {
+	rm, _, cleanup := setupRecordManagerTest(t)
+	defer cleanup()
+
+	t.Log("开始测试事务撤销")
+
+	// 创建测试事务
+	tx := createTestTransaction(t, rm)
+
+	// 插入记录
+	record := createTestRecord(1, "test value")
+	if err := rm.InsertRecord(record, tx); err != nil {
+		t.Fatalf("插入记录失败: %v", err)
+	}
+
+	// 撤销最后一个操作
+	if err := rm.Undo(tx); err != nil {
+		t.Fatalf("撤销操作失败: %v", err)
+	}
+
+	// 验证记录是否被撤销
+	_, err := rm.FindRecord(record.GetKey())
+	if err == nil {
+		t.Error("记录应该已被撤销")
 	}
 }

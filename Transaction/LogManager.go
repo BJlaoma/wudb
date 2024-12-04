@@ -38,3 +38,11 @@ func (lm *LogManager) WriteTransactionLog(log *TransactionLog) {
 		lm.fileHandle.Write([]byte("\n"))
 	}
 }
+
+func (lm *LogManager) Undo(log *TransactionLog) {
+
+}
+
+func (lm *LogManager) Rollback(log *TransactionLog) {
+
+}

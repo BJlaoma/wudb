@@ -2,6 +2,7 @@ package manager
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"wudb/Entity/Page"
 	"wudb/Entity/Record"
@@ -45,7 +46,9 @@ func (rm *RecordManager) InsertRecord(record *Record.Record, tx *Transaction.Tra
 		Record:        record,
 		OldRecord:     nil,
 	}
+	rm.transactionManager.AddTransaction(tx)
 	rm.transactionManager.AddOperation(operation)
+
 	meta, err := rm.pageManager.GetMetaPage()
 	if err != nil {
 		return err
@@ -332,7 +335,7 @@ func (rm *RecordManager) splitInternalPage(page *Page.Page, record *Record.Inter
 		return err, nil
 	}
 
-	// 返回分裂错误和��升的记录
+	// 返回分裂错误和升的记录
 	return fmt.Errorf("页面需要分裂"), upRecord
 }
 
@@ -345,7 +348,8 @@ func (rm *RecordManager) DeleteRecord(key [32]byte, tx *Transaction.Transaction)
 		OldRecord:     nil,
 		PageID:        0,
 	}
-	tx.AddOperation(operation)
+	rm.transactionManager.AddTransaction(tx)
+	rm.transactionManager.AddOperation(operation)
 	meta, err := rm.pageManager.GetMetaPage()
 	if err != nil {
 		return err
@@ -355,67 +359,71 @@ func (rm *RecordManager) DeleteRecord(key [32]byte, tx *Transaction.Transaction)
 		return ErrNotFound
 	}
 
-	err = rm.deleteRecordFromTree(key, meta.RootPageID)
+	_, err = rm.deleteRecordFromTree(key, meta.RootPageID, nil)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
+type DelResult struct {
+	InternalRecord *Record.InternalRecord
+}
+
 // 从树中删除记录
-func (rm *RecordManager) deleteRecordFromTree(key [32]byte, pageID uint32) error {
+func (rm *RecordManager) deleteRecordFromTree(key [32]byte, pageID uint32, internalRecord *Record.InternalRecord) (DelResult, error) {
 	currentPage, err := rm.pageManager.GetPage(pageID)
 	if err != nil {
-		return err
+		return DelResult{}, err
 	}
 
 	// 如果是内部节点
 	if currentPage.Header.PageType == Page.InternalPageID {
 		nextPageID := rm.findNextPage(currentPage, key)
-		err = rm.deleteRecordFromTree(key, nextPageID)
+
+		result, err := rm.deleteRecordFromTree(key, nextPageID, internalRecord)
 
 		// 如果子节点记录太少，需要重新平衡
 		if err != nil {
 			if err.Error() == "节点记录太少" {
-				return rm.handleUnderflow(currentPage)
+				return result, rm.handleUnderflow(currentPage)
 			}
-			return err
+			return DelResult{}, err
 		}
 
-		// 检查当前内部节点是否需要重新平衡
-		if currentPage.Header.RecordCount < currentPage.Header.MaxRecordCount/2 {
-			// 如果是根节点且只有一个子节点，允许记录数少于一半
-			if currentPage.Header.PageID == rm.pageManager.metaPage.RootPageID &&
-				currentPage.Header.RecordCount > 0 {
-				return nil
-			}
-			return fmt.Errorf("节点记录太少")
-		}
-
-		return nil
+		return DelResult{}, nil
 	}
 
 	// 如果是叶子节点
 	if currentPage.Header.PageType == Page.LeafPageID {
-		// 删除记录
-		if err := currentPage.DeleteRecord(key); err != nil {
-			return err
-		}
-
+		// 尝试删除记录
+		err := currentPage.DeleteRecord(key)
 		// 检查是否需要合并
-		if currentPage.Header.RecordCount < currentPage.Header.MaxRecordCount/2 {
-			// 如果是根节点且不为空，允许记录数少于一半
-			if currentPage.Header.PageID == rm.pageManager.metaPage.RootPageID &&
-				currentPage.Header.RecordCount > 0 {
-				return rm.pageManager.UpdatePage(currentPage)
+		if err != nil {
+			if err.Error() == "记录不存在" {
+				return DelResult{}, ErrNotFound
+			} else if err.Error() == "节点记录太少" {
+				// 如果是根节点且不为空，允许记录数少于一半
+				if currentPage.Header.PageID == rm.pageManager.metaPage.RootPageID &&
+					currentPage.Header.RecordCount > 0 {
+					return DelResult{}, rm.pageManager.UpdatePage(currentPage)
+				}
+				//借节点或者是合并节点，借和合并都有可能改变上层的索引值
+				err, internalRecord := rm.mergeLeafNodes(currentPage, nil)
+				if err != nil {
+					return DelResult{}, err
+				}
+				return DelResult{InternalRecord: internalRecord}, err
 			}
-			return fmt.Errorf("节点记录太少")
+			return DelResult{}, err
 		}
 
-		return rm.pageManager.UpdatePage(currentPage)
+		//先更新然后再想办法平衡
+		rm.pageManager.UpdatePage(currentPage)
+		return DelResult{}, fmt.Errorf("节点记录太少")
 	}
 
-	return fmt.Errorf("无效的页面类型")
+	return DelResult{}, fmt.Errorf("无效的页面类型")
 }
 
 // 更新记录
@@ -427,7 +435,8 @@ func (rm *RecordManager) UpdateRecord(record *Record.Record, tx *Transaction.Tra
 		OldRecord:     nil,
 		PageID:        0,
 	}
-
+	rm.transactionManager.AddTransaction(tx)
+	rm.transactionManager.AddOperation(operation)
 	meta, err := rm.pageManager.GetMetaPage()
 	if err != nil {
 		return err
@@ -451,30 +460,48 @@ func (rm *RecordManager) UpdateRecord(record *Record.Record, tx *Transaction.Tra
 }
 
 // 合并叶子节点
-func (rm *RecordManager) mergeLeafNodes(page *Page.Page) error {
+func (rm *RecordManager) mergeLeafNodes(page *Page.Page, internalRecord *Record.InternalRecord) (error, *Record.InternalRecord) {
 	meta, err := rm.pageManager.GetMetaPage()
 	if err != nil {
-		return err
+		return err, nil
 	}
 
 	// 如果是根节点，且记录数不为0，则不需要合并
 	if page.Header.PageID == meta.RootPageID && page.Header.RecordCount > 0 {
-		return nil
+		return nil, nil
 	}
 
 	// 获取兄弟节点
-	siblingPage, isLeft, err := rm.getSiblingPage(page)
+	isLeft := false
+	siblingPage := &Page.Page{}
+	if page.Header.PageID == internalRecord.FrontPointer {
+		isLeft = false
+		siblingPage, err = rm.pageManager.GetPage(internalRecord.NextPointer)
+	} else {
+		isLeft = true
+		siblingPage, err = rm.pageManager.GetPage(internalRecord.FrontPointer)
+	}
+	//siblingPage, isLeft, err := rm.getSiblingPage(page)
 	if err != nil {
-		return err
+		return err, nil
 	}
 
 	// 如果可以借用记录
 	if siblingPage.Header.RecordCount > siblingPage.Header.MaxRecordCount/2 {
-		return rm.redistributeRecords(page, siblingPage, isLeft)
+		rm.redistributeRecords(page, siblingPage, isLeft)
+		//借用成功之后，范围值改变，需要更新上层索引值
+		if internalRecord != nil && isLeft {
+			internalRecord.FrontPointer = binary.LittleEndian.Uint32(siblingPage.GetMaxKey())
+			internalRecord.NextPointer = binary.LittleEndian.Uint32(page.GetMinKey())
+		}
+
+		rm.pageManager.UpdatePage(page)
+		rm.pageManager.UpdatePage(siblingPage)
+		return nil, internalRecord
 	}
 
 	// 否则需要合并节点
-	return rm.mergeSiblingPages(page, siblingPage, isLeft)
+	return rm.mergeSiblingPages(page, siblingPage, isLeft), internalRecord
 }
 
 // 查找记录
@@ -553,7 +580,7 @@ func (rm *RecordManager) RangeQuery(startKey, endKey [32]byte) ([]*Record.Record
 func (rm *RecordManager) handleUnderflow(page *Page.Page) error {
 	// 如果是根节点，且只有一个子节点，则需要降低树高
 	if page.Header.PageID == rm.pageManager.metaPage.RootPageID {
-		if page.Header.RecordCount == 1 {
+		if page.Header.RecordCount == 0 {
 			return rm.decreaseTreeHeight(page)
 		}
 		return nil
@@ -770,8 +797,10 @@ func (rm *RecordManager) mergeInternalPages(page, siblingPage *Page.Page, isLeft
 	return rm.pageManager.DisposePage(sourcePage)
 }
 
+// 回滚事务
 func (rm *RecordManager) Rollback(transaction *Transaction.Transaction) error {
-	for _, operation := range transaction.Operations {
+	for i := len(transaction.Operations) - 1; i >= 0; i-- {
+		operation := transaction.Operations[i]
 		if operation.OperationType == Transaction.UpdateOperation {
 			_, _, pageID := rm.updateRecordToTree(operation.OldRecord, uint32(operation.PageID))
 			operation.PageID = int32(pageID)
@@ -785,4 +814,128 @@ func (rm *RecordManager) Rollback(transaction *Transaction.Transaction) error {
 	}
 	rm.transactionManager.Rollback(transaction.TransactionID)
 	return nil
+}
+
+// 撤销事务
+func (rm *RecordManager) Undo(transaction *Transaction.Transaction) error {
+	operation := transaction.Operations[len(transaction.Operations)-1]
+	if operation.OperationType == Transaction.UpdateOperation {
+		_, _, pageID := rm.updateRecordToTree(operation.OldRecord, uint32(operation.PageID))
+		operation.PageID = int32(pageID)
+	}
+	if operation.OperationType == Transaction.DeleteOperation {
+		rm.InsertRecord(operation.Record, transaction)
+	}
+	if operation.OperationType == Transaction.InsertOperation {
+		rm.DeleteRecord(operation.Record.Key, transaction)
+	}
+	rm.transactionManager.Undo(transaction.TransactionID)
+	return nil
+}
+
+// TreeReverse 遍历并输出B+树的结构
+func (rm *RecordManager) TreeReverse() error {
+	meta, err := rm.pageManager.GetMetaPage()
+	if err != nil {
+		return err
+	}
+
+	if meta.RootPageID == 0 {
+		fmt.Println("空树")
+		return nil
+	}
+
+	// 使用队列进行层次遍历
+	type QueueItem struct {
+		pageID uint32
+		level  int
+	}
+	queue := []QueueItem{{pageID: meta.RootPageID, level: 1}}
+	currentLevel := 1
+
+	fmt.Printf("B+树结构 (高度: %d)\n", meta.TreeHeight)
+	fmt.Println("====================")
+
+	for len(queue) > 0 {
+		// 出队
+		item := queue[0]
+		queue = queue[1:]
+
+		// 如果进入新的层级，打印层级信息
+		if item.level > currentLevel {
+			fmt.Println("--------------------")
+			currentLevel = item.level
+			fmt.Printf("第 %d 层:\n", currentLevel)
+		}
+
+		// 获取页面
+		page, err := rm.pageManager.GetPage(item.pageID)
+		if err != nil {
+			return fmt.Errorf("获取页面失败 (ID=%d): %v", item.pageID, err)
+		}
+
+		// 输出页面信息
+		fmt.Printf("页面ID: %d, 类型: %s, 记录数: %d",
+			page.Header.PageID,
+			getPageTypeName(page.Header.PageType),
+			page.Header.RecordCount)
+
+		// 如果是叶子节点，输出前后指针
+		if page.Header.PageType == Page.LeafPageID {
+			fmt.Printf(", Prev: %d, Next: %d",
+				page.Header.PrevPageID,
+				page.Header.NextPageID)
+		}
+		fmt.Println()
+
+		// 输出键值
+		fmt.Print("键值: [")
+		for i := uint32(0); i < page.Header.RecordCount; i++ {
+			key, err := page.ReadKey(i*32, 32)
+			if err != nil {
+				return fmt.Errorf("读取键值失败: %v", err)
+			}
+			if i > 0 {
+				fmt.Print(", ")
+			}
+			fmt.Printf("%d", key[3]) // 假设键值在最后一个字节
+		}
+		fmt.Println("]")
+
+		// 如果是内部节点，将子节点加入队列
+		if page.Header.PageType == Page.InternalPageID {
+			for i := uint32(0); i < page.Header.RecordCount; i++ {
+				internalRecord := page.GetInternalRecord(int(i))
+				// 将前向指针加入队列
+				queue = append(queue, QueueItem{
+					pageID: internalRecord.GetFrontPointer(),
+					level:  item.level + 1,
+				})
+				// 最后一个记录还需要加入后向指针
+				if i == page.Header.RecordCount-1 {
+					queue = append(queue, QueueItem{
+						pageID: internalRecord.GetNextPointer(),
+						level:  item.level + 1,
+					})
+				}
+			}
+		}
+	}
+
+	fmt.Println("====================")
+	return nil
+}
+
+// 获取页面类型的字符串表示
+func getPageTypeName(pageType uint32) string {
+	switch pageType {
+	case Page.MetaPageID:
+		return "Meta"
+	case Page.InternalPageID:
+		return "Internal"
+	case Page.LeafPageID:
+		return "Leaf"
+	default:
+		return "Unknown"
+	}
 }

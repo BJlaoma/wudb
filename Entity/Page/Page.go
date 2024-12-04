@@ -405,6 +405,7 @@ func (p *Page) DeleteRecord(key [32]byte) error {
 			left = mid + 1
 		}
 	}
+
 	return fmt.Errorf("记录不存在")
 }
 
@@ -422,6 +423,9 @@ func (p *Page) removeRecordAt(index int) error {
 	}
 
 	p.Header.RecordCount--
+	if p.Header.RecordCount < p.Header.MaxRecordCount/2 {
+		return fmt.Errorf("节点记录太少")
+	}
 	return nil
 }
 
@@ -470,6 +474,14 @@ func (p *Page) GetMaxKey() []byte {
 		return nil
 	}
 	return p.Key[(p.Header.RecordCount-1)*32 : p.Header.RecordCount*32]
+}
+
+// 获取最小键值
+func (p *Page) GetMinKey() []byte {
+	if p.Header.RecordCount == 0 {
+		return nil
+	}
+	return p.Key[0:32]
 }
 
 // 移除最后一条记录
